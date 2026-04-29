@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkRouter / URL Shortening Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #08080a;
+      --surface: #0f0f12;
+      --surface-hover: #16161a;
+      --border: #1e1e24;
+      --accent: #00f0ff;
+      --accent-dim: rgba(0, 240, 255, 0.12);
+      --text: #e8e8ec;
+      --text-muted: #6b6b76;
+      --error: #ff3b5c;
+      --font-display: 'Unbounded', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --gutter: clamp(1.5rem, 4vw, 3rem);
+      --radius: 6px;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 15px; scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-display);
+      line-height: 1.5;
+      min-height: 100dvh;
+      display: flex; flex-direction: column;
+      overflow-x: hidden;
+      cursor: none;
+    }
+
+    /* Grid & Scanline Overlays */
+    body::before {
+      content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image: 
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px),
+        repeating-linear-gradient(0deg, rgba(0,240,255,0.02) 0px, rgba(0,240,255,0.02) 1px, transparent 1px, transparent 50px);
+      background-size: 90px 90px, 90px 90px, 100% 50px;
+      mask-image: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0.8) 30%, transparent 80%);
+      opacity: 0.25;
+    }
+    body::after {
+      content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 900;
+      background-image: url("image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      mix-blend-mode: overlay;
+    }
+
+    /* Custom Cursor */
+    .cursor-dot, .cursor-ring {
+      position: fixed; pointer-events: none; border-radius: 50%; z-index: 1000;
+      transform: translate(-50%, -50%);
+    }
+    .cursor-dot { width: 6px; height: 6px; background: var(--accent); }
+    .cursor-ring {
+      width: 32px; height: 32px; border: 1px solid rgba(255,255,255,0.2);
+      transition: width 0.25s var(--ease-out), height 0.25s var(--ease-out), border-color 0.25s, background 0.25s;
+    }
+    .cursor-ring.hover { width: 56px; height: 56px; border-color: var(--accent); background: var(--accent-dim); }
+
+    /* Header */
+    header {
+      padding: 1.25rem var(--gutter);
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(8,8,10,0.85); backdrop-filter: blur(10px); z-index: 50;
+      position: sticky; top: 0;
+    }
+    .brand { font-family: var(--font-display); font-weight: 700; font-size: 1.2rem; letter-spacing: -0.02em; }
+    .brand span { color: var(--accent); }
+    .status-pill {
+      display: flex; align-items: center; gap: 0.5rem; font-size: 0.75rem;
+      padding: 0.4rem 0.75rem; border-radius: 100px; border: 1px solid var(--border);
+      background: var(--surface); transition: all 0.2s;
+    }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+    .status-pill.online .status-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .status-pill.online { border-color: rgba(0, 240, 255, 0.3); }
+
+    /* Main Layout */
+    main { padding: var(--gutter); max-width: 1200px; margin: 0 auto; flex: 1; display: flex; flex-direction: column; gap: 2rem; }
+
+    /* Routing Visualization */
+    .route-viz {
+      display: flex; align-items: center; justify-content: center; gap: 1.5rem;
+      padding: 2rem 0; position: relative; flex-wrap: wrap;
+    }
+    .route-node {
+      background: var(--surface); border: 1px solid var(--border); padding: 1rem 1.5rem;
+      border-radius: var(--radius); font-family: var(--font-mono); font-size: 0.85rem;
+      color: var(--text-muted); position: relative; z-index: 2; min-width: 120px; text-align: center;
+      transition: all 0.3s var(--ease-out);
+    }
+    .route-node.active { border-color: var(--accent); color: var(--text); box-shadow: 0 0 12px var(--accent-dim); }
+    .route-connector {
+      height: 2px; width: 60px; background: var(--border); position: relative;
+      mask-image: linear-gradient(90deg, transparent 10%, black 10% 90%, transparent 90%);
+    }
+    .route-connector::after {
+      content: ''; position: absolute; top: -3px; left: 0; width: 8px; height: 8px;
+      background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent);
+      animation: pulse-route 1.5s infinite linear;
+    }
+    @keyframes pulse-route { 0% { left: 0; opacity: 1; } 100% { left: 100%; opacity: 0; } }
+
+    /* Console Grid */
+    .console-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    @media (max-width: 900px) { .console-grid { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;
+    }
+    .panel-header { display: flex; justify-content: space-between; align-items: baseline; }
+    .panel-title { font-size: 0.9rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .panel-status { font-family: var(--font-mono); font-size: 0.75rem; color: var(--accent); }
+
+    .input-group { display: flex; flex-direction: column; gap: 0.5rem; }
+    .input-label { font-size: 0.8rem; color: var(--text-muted); }
+    .url-input, .code-input {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font-mono); font-size: 0.95rem;
+      padding: 0.9rem; border-radius: var(--radius); transition: all 0.2s;
+    }
+    .url-input:focus, .code-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+    .url-input::placeholder, .code-input::placeholder { color: var(--text-muted); opacity: 0.6; }
+
+    .toggle-row { display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; color: var(--text-muted); }
+    .toggle { width: 36px; height: 20px; background: var(--border); border-radius: 10px; position: relative; cursor: pointer; transition: background 0.2s; }
+    .toggle::after {
+      content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+      background: var(--text-muted); border-radius: 50%; transition: transform 0.2s var(--ease-out), background 0.2s;
+    }
+    .toggle.active { background: var(--accent-dim); }
+    .toggle.active::after { transform: translateX(16px); background: var(--accent); }
+
+    .btn-primary {
+      width: 100%; background: var(--accent); color: #08080a; font-family: var(--font-display); font-weight: 600;
+      padding: 1rem; border-radius: var(--radius); border: none; cursor: pointer;
+      font-size: 0.95rem; transition: transform 0.2s var(--ease-out), box-shadow 0.3s;
+      margin-top: auto;
+    }
+    .btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px var(--accent-dim); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .result-box {
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1rem; display: none; flex-direction: column; gap: 0.75rem;
+    }
+    .result-box.visible { display: flex; }
+    .result-url { font-family: var(--font-mono); font-size: 0.9rem; color: var(--accent); word-break: break-all; }
+    .copy-btn {
+      background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted);
+      padding: 0.6rem; border-radius: var(--radius); cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem;
+      transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+    }
+    .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Analytics Panel */
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    .stat-item { text-align: center; }
+    .stat-value { font-family: var(--font-display); font-weight: 700; font-size: 1.5rem; color: var(--accent); }
+    .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+    .activity-log {
+      flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1rem; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);
+      overflow-y: auto; max-height: 200px; min-height: 120px;
+    }
+    .log-entry { margin-bottom: 0.4rem; opacity: 0.8; }
+    .log-time { color: var(--accent); margin-right: 0.5rem; }
+
+    /* Utilities */
+    .hidden { display: none !important; }
+    .shake { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
+    @keyframes shake { 10%, 90% { transform: translate3d(-1px, 0, 0); } 20%, 80% { transform: translate3d(2px, 0, 0); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+      .cursor-dot, .cursor-ring { display: none; }
+      body { cursor: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="cursor-dot" id="dot"></div>
+  <div class="cursor-ring" id="ring"></div>
+
+  <header>
+    <div class="brand">Link<span>Router</span></div>
+    <div class="status-pill" id="api-status">
+      <div class="status-dot"></div>
+      <span class="status-text">Checking API...</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Routing Visualization -->
+    <div class="route-viz">
+      <div class="route-node" id="node-input">INPUT</div>
+      <div class="route-connector"></div>
+      <div class="route-node" id="node-process">ENCODE</div>
+      <div class="route-connector"></div>
+      <div class="route-node" id="node-output">REDIRECT</div>
+    </div>
+
+    <!-- Console Grid -->
+    <div class="console-grid">
+      <!-- Left: Shorten Console -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Shorten URL</span>
+          <span class="panel-status">● ACTIVE</span>
+        </div>
+        <div class="input-group">
+          <label class="input-label">Destination URL</label>
+          <input type="url" class="url-input" id="url-input" placeholder="https://example.com/very/long/path" required>
+        </div>
+        <div class="input-group">
+          <div class="toggle-row">
+            <div class="toggle" id="custom-toggle"></div>
+            <span>Custom short code</span>
+          </div>
+          <input type="text" class="code-input hidden" id="code-input" placeholder="my-link (3+ chars)">
+        </div>
+        <button class="btn-primary hoverable" id="shorten-btn">
+          ▶ Generate Route
+        </button>
+        <div class="result-box" id="result-box">
+          <div class="result-url" id="result-url"></div>
+          <button class="copy-btn hoverable" id="copy-btn">⧉ Copy to Clipboard</button>
+        </div>
+      </div>
+
+      <!-- Right: Analytics Console -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Traffic Analytics</span>
+          <span class="panel-status" id="analytics-status">IDLE</span>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-item">
+            <div class="stat-value" id="stat-clicks">0</div>
+            <div class="stat-label">Total Clicks</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-created">--</div>
+            <div class="stat-label">Created</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-last">--</div>
+            <div class="stat-label">Last Hit</div>
+          </div>
+        </div>
+        <div class="activity-log" id="activity-log">
+          <div class="log-entry">[SYSTEM] Console initialized. Awaiting routes...</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // CONFIG
+    const API_BASE = window.location.origin;
+    const ENDPOINT = `${API_BASE}/shorten`;
+    const ANALYTICS_ENDPOINT = `${API_BASE}/analytics`;
+
+    // DOM
+    const urlInput = document.getElementById('url-input');
+    const customToggle = document.getElementById('custom-toggle');
+    const codeInput = document.getElementById('code-input');
+    const shortenBtn = document.getElementById('shorten-btn');
+    const resultBox = document.getElementById('result-box');
+    const resultUrl = document.getElementById('result-url');
+    const copyBtn = document.getElementById('copy-btn');
+    const statusPill = document.getElementById('api-status');
+    const statusText = document.querySelector('.status-text');
+    const analyticsStatus = document.getElementById('analytics-status');
+    const statClicks = document.getElementById('stat-clicks');
+    const statCreated = document.getElementById('stat-created');
+    const statLast = document.getElementById('stat-last');
+    const activityLog = document.getElementById('activity-log');
+    const dot = document.getElementById('dot');
+    const ring = document.getElementById('ring');
+    const hoverables = document.querySelectorAll('.hoverable, button, a');
+
+    // STATE
+    let currentCode = null;
+    let isProcessing = false;
+
+    // CURSOR
+    let mouseX = 0, mouseY = 0, ringX = 0, ringY = 0;
+    document.addEventListener('mousemove', (e) => {
+      mouseX = e.clientX; mouseY = e.clientY;
+      dot.style.transform = `translate(${mouseX}px, ${mouseY}px) translate(-50%, -50%)`;
+    });
+    function animateRing() {
+      ringX += (mouseX - ringX) * 0.15;
+      ringY += (mouseY - ringY) * 0.15;
+      ring.style.transform = `translate(${ringX}px, ${ringY}px) translate(-50%, -50%)`;
+      requestAnimationFrame(animateRing);
+    }
+    animateRing();
+    hoverables.forEach(el => {
+      el.addEventListener('mouseenter', () => ring.classList.add('hover'));
+      el.addEventListener('mouseleave', () => ring.classList.remove('hover'));
+    });
+
+    // TOGGLE
+    customToggle.addEventListener('click', () => {
+      customToggle.classList.toggle('active');
+      codeInput.classList.toggle('hidden');
+      if (!customToggle.classList.contains('active')) codeInput.value = '';
+    });
+
+    // UTILS
+    const getTime = () => new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const log = (msg) => {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${getTime()}]</span>${msg}`;
+      activityLog.prepend(entry);
+    };
+    const formatDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
+
+    // HEALTH CHECK
+    const pingHealth = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/docs`); // FastAPI auto-docs endpoint
+        if (res.ok) { statusPill.classList.add('online'); statusText.textContent = 'API Online'; }
+      } catch { statusPill.classList.remove('online'); statusText.textContent = 'API Offline'; }
+    };
+    pingHealth();
+    setInterval(pingHealth, 30000);
+
+    // ANIMATION HELPERS
+    const animateRoute = async () => {
+      const nodes = ['node-input', 'node-process', 'node-output'];
+      for (const id of nodes) {
+        document.getElementById(id).classList.add('active');
+        await new Promise(r => setTimeout(r, 300));
+        document.getElementById(id).classList.remove('active');
+      }
+    };
+
+    // MAIN SHORTEN LOGIC
+    const shorten = async () => {
+      const url = urlInput.value.trim();
+      const code = codeInput.value.trim();
+      if (!url) {
+        urlInput.parentElement.classList.add('shake');
+        setTimeout(() => urlInput.parentElement.classList.remove('shake'), 400);
+        log('[ERROR] Destination URL required.');
+        return;
+      }
+      if (isProcessing) return;
+
+      isProcessing = true;
+      shortenBtn.disabled = true;
+      shortenBtn.textContent = '● Routing...';
+      resultBox.classList.remove('visible');
+      log('[REQUEST] Encoding route...');
+
+      try {
+        await animateRoute();
+        
+        const res = await fetch(ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ long_url: url, custom_code: code || null })
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: 'Server error' }));
+          throw new Error(err.detail || 'Failed to generate route');
+        }
+
+        const data = await res.json();
+        currentCode = data.short_code;
+        const fullShortUrl = `${window.location.origin}/${data.short_code}`;
+        
+        resultUrl.textContent = fullShortUrl;
+        resultBox.classList.add('visible');
+        log(`[SUCCESS] Route mapped: /${data.short_code}`);
+        log(`[ANALYTICS] Clicks: ${data.clicks} | Target: ${url.substring(0, 40)}...`);
+        
+        updateAnalytics(data.short_code);
+      } catch (err) {
+        log(`[ERROR] ${err.message}`);
+        shortenBtn.textContent = '✖ Retry';
+        setTimeout(() => { shortenBtn.textContent = '▶ Generate Route'; }, 1500);
+      } finally {
+        isProcessing = false;
+        shortenBtn.disabled = false;
+        shortenBtn.textContent = '▶ Generate Route';
+      }
+    };
+
+    const updateAnalytics = async (code) => {
+      try {
+        const res = await fetch(`${ANALYTICS_ENDPOINT}/${code}`);
+        if (!res.ok) throw new Error('Analytics fetch failed');
+        const data = await res.json();
+        
+        statClicks.textContent = data.clicks;
+        statCreated.textContent = formatDate(data.created_at);
+        statLast.textContent = formatDate(data.last_accessed);
+        analyticsStatus.textContent = 'TRACKING';
+        analyticsStatus.style.color = 'var(--accent)';
+      } catch (err) {
+        log(`[WARN] Analytics sync: ${err.message}`);
+      }
+    };
+
+    // EVENT LISTENERS
+    shortenBtn.addEventListener('click', shorten);
+    urlInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') shorten(); });
+    
+    copyBtn.addEventListener('click', () => {
+      if (!currentCode) return;
+      navigator.clipboard.writeText(`${window.location.origin}/${currentCode}`);
+      copyBtn.textContent = '✓ Copied';
+      setTimeout(() => { copyBtn.textContent = '⧉ Copy to Clipboard'; }, 2000);
+      log('[ACTION] Short URL copied to clipboard.');
+    });
+
+    // INIT
+    log('[SYSTEM] LinkRouter console online. Ready to map URLs.');
+  </script>
+</body>
+</html>
